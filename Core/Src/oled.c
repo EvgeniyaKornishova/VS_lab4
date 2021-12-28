@@ -16,11 +16,11 @@ uint8_t oled_Init(void) {
 
 	oled_WriteCommand(0xAE); // Disable display
 	oled_WriteCommand(0x20); // Memory addressing mode
-	oled_WriteCommand(0x10); // ?
-	oled_WriteCommand(0xB0); // ?!
+	oled_WriteCommand(0x10); // 			page addressing
+	oled_WriteCommand(0xB0); // Page start address (from Page 0)
 	oled_WriteCommand(0xC8); // COM signal mapping inversion (PAGE0: COM63 - COM56)
-	oled_WriteCommand(0x00); // ?!
-	oled_WriteCommand(0x10); // ?!
+	oled_WriteCommand(0x00); // Lower start column address
+	oled_WriteCommand(0x10); // Upper start column address
 	oled_WriteCommand(0x40); // Start string is 0
 	oled_WriteCommand(0x81); // Contrast -
 	oled_WriteCommand(0xFF); //				256
@@ -36,7 +36,7 @@ uint8_t oled_Init(void) {
 	oled_WriteCommand(0xD9); // Precharging setting
 	oled_WriteCommand(0x22); //						(phase1 = 2, phase2 = 2)
 	oled_WriteCommand(0xDA); // COM signal configuration setting
-	oled_WriteCommand(0x12); // ?
+	oled_WriteCommand(0x12); //
 	oled_WriteCommand(0xDB); // Voltage setting
 	oled_WriteCommand(0x20); // 				Vcomh = ~0.77 x Vcc
 	oled_WriteCommand(0x8D); // Enable embedded voltage source
