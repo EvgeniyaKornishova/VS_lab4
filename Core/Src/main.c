@@ -286,7 +286,7 @@ int main(void)
 			if (lock_is_input_time_expired(&lock)) {
 				input_len = 0;
 				draw_display(0);
-				lock_stop_time(&lock);
+				lock_stop_timer(&lock);
 			}
 
 		kb_read(&lock);

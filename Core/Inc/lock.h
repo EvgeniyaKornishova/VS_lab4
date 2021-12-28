@@ -27,6 +27,8 @@ uint8_t lock_is_input_time_expired(Lock *lock);
 void lock_reset_number_of_mistakes(Lock *lock);
 uint8_t lock_is_blocked(Lock *lock);
 uint8_t lock_unlock(Lock* lock, uint8_t pass_len, uint8_t * pass_value);
+void lock_start_timer(Lock *lock);
+void lock_stop_timer(Lock *lock);
 
 #endif
 
