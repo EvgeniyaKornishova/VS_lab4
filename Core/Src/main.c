@@ -21,7 +21,6 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "i2c.h"
-#include "tim.h"
 #include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
@@ -70,24 +69,14 @@ typedef enum {
 
 APP_MODE app_mode = APP_MODE_PASS_INPUT;
 
-uint8_t keys_buffer[KEY_BUFFER_LEN];
-uint8_t *keys_buffer_read_p;
-uint8_t *keys_buffer_write_p;
-
 uint8_t input[LOCK_PASS_LEN_MAX] = { 0 };
 uint8_t input_len = 0;
-
-uint8_t screen_needs_to_update = 0;
 
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
-
-void process_key(uint8_t key, Lock *lock);
-uint8_t read_key_from_keys_buffer();
-void write_key_to_keys_buffer(uint8_t key);
 
 void switch_app_mode();
 
@@ -109,7 +98,7 @@ void print_message(char *str) {
 	oled_SetCursor(9, 23);
 	oled_WriteString(str, Font_11x18, Black);
 
-	screen_needs_to_update = 1;
+	oled_UpdateScreen();
 	HAL_Delay(MIN_SEC_TO_MS(0, 2));
 }
 
@@ -121,10 +110,6 @@ void draw_display(uint8_t pass_len) {
 
 	oled_DrawSquare(21, 106, 26, 37, Black); // Password field border
 
-	// Menu
-	oled_SetCursor(9, 54);
-	oled_WriteString("CO-10 CL-11 MD-12", Font_7x10, Black);
-
 	// Header - current mode
 	oled_SetCursor(72, 0);
 	if (app_mode == APP_MODE_PASS_INPUT)
@@ -134,16 +119,13 @@ void draw_display(uint8_t pass_len) {
 
 	print_pass(pass_len);
 
-	screen_needs_to_update = 1;
+	oled_UpdateScreen();
 }
 
 void print_pass(uint8_t len) {
 	char pass[LOCK_PASS_LEN_MAX + 1] = { '\0' };
-	int i = 0;
-	for (; i < len; i++)
+	for (int i = 0; i < len; i++)
 		pass[i] = '*';
-	for (; i < LOCK_PASS_LEN_MAX; i++)
-		pass[i] = ' ';
 
 	oled_SetCursor(22, 27);
 	oled_WriteString(pass, Font_7x10, Black);
@@ -194,16 +176,21 @@ void process_key(uint8_t key, Lock *lock) {
 	case 7:
 	case 8:
 	case 9:
-		if (input_len < LOCK_PASS_LEN_MAX) {
-			input[input_len++] = key;
+		if (app_mode == APP_MODE_PASS_INPUT && input_len == 0)
+			lock_start_timer(lock);
 
-			draw_display(input_len);
-		}
+		if (input_len < LOCK_PASS_LEN_MAX)
+			input[input_len++] = key;
+		else
+			print_message(MSG_PASS_LEN_ERROR);
+
+		draw_display(input_len);
 		break;
 	case 10: // Confirm
-		if (app_mode == APP_MODE_PASS_INPUT)
+		if (app_mode == APP_MODE_PASS_INPUT){
+			lock_stop_timer(lock);
 			pass_input_confirm(lock);
-		else
+		} else
 			// APP_MODE_PASS_CHANGE
 			pass_change_confirm(lock);
 
@@ -211,85 +198,41 @@ void process_key(uint8_t key, Lock *lock) {
 
 		break;
 	case 11:	// Reset
+		if (app_mode == APP_MODE_PASS_INPUT)
+			lock_stop_timer(lock);
 		input_len = 0;
 		draw_display(0);
 		break;
 	case 12:	// Change mode
 		if (app_mode == APP_MODE_PASS_CHANGE)
 			print_message(MSG_PASS_UNCHANGED);
+		else
+			lock_stop_timer(lock);
 		input_len = 0;
 		switch_app_mode();
 		break;
 	}
 }
 
-// TODO: verify this function
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
-	if (htim->Instance == TIM6) {
-		if (screen_needs_to_update && !kb_state) {
-			oled_UpdateScreen();
-			screen_needs_to_update = 0;
-		}
+void kb_read(Lock * lock) {
+ static const uint8_t rows[] = { 0xFE, 0xFD, 0xFB, 0xF7 };
+ static uint8_t old_keys[] = { 0, 0, 0, 0 };
 
-		uint8_t key = 0;
+ for(int current_row=0; current_row<4; current_row++){
+	 uint8_t current_key = check_row(rows[current_row]);
+	  uint8_t *old_key = &old_keys[current_row];
 
-		static uint8_t prev_confirmed_key = 0;
-		static uint8_t prev_key = 0;
-		uint8_t current_key = kb_read();
+	  for (int i = 0; i < 3; i++) {
+	   int mask = 1 << i;
+	   if ((current_key & mask) && !(*old_key & mask)) {
+	    uint8_t key = i + 1 + 3 * current_row;
+	    process_key(key, lock);
+	   }
+	  }
 
-		// key is really pressed or it is just an contact bounce?
-		if (current_key == prev_key) {
-			if (current_key != prev_confirmed_key) {
-				prev_confirmed_key = current_key;
-				key = current_key;
-			}
-		} else
-			prev_key = current_key;
+	  *old_key = current_key;
+ }
 
-		// if key isn't pressed
-		if (!key)
-			return;
-
-		write_key_to_keys_buffer(key);
-		return;
-	}
-}
-
-uint8_t read_key_from_keys_buffer() {
-	// critical section
-	uint32_t primask_bit = __get_PRIMASK(); /**< backup PRIMASK bit */
-	__disable_irq(); /**< Disable all interrupts by setting PRIMASK bit on Cortex*/
-
-	uint8_t key = *(keys_buffer_read_p++);
-	if (keys_buffer_read_p >= keys_buffer + KEY_BUFFER_LEN)
-		keys_buffer_read_p = keys_buffer;
-
-	__set_PRIMASK(primask_bit); /**< Restore PRIMASK bit*/
-
-	return key;
-}
-
-void write_key_to_keys_buffer(uint8_t key) {
-	// critical section
-	uint32_t primask_bit = __get_PRIMASK(); /**< backup PRIMASK bit */
-	__disable_irq(); /**< Disable all interrupts by setting PRIMASK bit on Cortex*/
-
-	*(keys_buffer_write_p++) = key;
-
-	if (keys_buffer_write_p >= keys_buffer + KEY_BUFFER_LEN)
-		keys_buffer_write_p = keys_buffer;
-
-	__set_PRIMASK(primask_bit); /**< Restore PRIMASK bit*/
-}
-
-void HAL_I2C_MemTxCpltCallback(I2C_HandleTypeDef *hi2c) {
-	if (hi2c == &hi2c1 && kb_state)
-		kb_continue();
-}
-
-void HAL_I2C_MemRxCpltCallback(I2C_HandleTypeDef *hi2c) {
-	if (hi2c == &hi2c1 && kb_state)
-		kb_continue();
 }
 
 /* USER CODE END 0 */
@@ -323,22 +266,18 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_I2C1_Init();
-  MX_TIM6_Init();
   /* USER CODE BEGIN 2 */
 
-	oled_Init();
+  oled_Init();
 
-	Lock lock = { };
-	lock_init(&lock, NULL, NULL);
+  Lock lock = { };
+  lock_init(&lock, NULL, NULL);
+  draw_display(0);
 
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-	keys_buffer_read_p = keys_buffer;
-	keys_buffer_write_p = keys_buffer;
-	HAL_TIM_Base_Start_IT(&htim6);
-	uint8_t key;
 	while (1) {
     /* USER CODE END WHILE */
 
@@ -347,18 +286,12 @@ int main(void)
 			if (lock_is_input_time_expired(&lock)) {
 				input_len = 0;
 				draw_display(0);
+				lock_stop_time(&lock);
 			}
 
-		key = 0;
+		kb_read(&lock);
 
-		if (keys_buffer_read_p != keys_buffer_write_p)
-			key = read_key_from_keys_buffer();
-
-		if (key != 0)
-			process_key(key, &lock);
-		else
-			HAL_Delay(100);
-
+		HAL_Delay(20);
 	}
   /* USER CODE END 3 */
 }
@@ -383,8 +316,8 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.HSEState = RCC_HSE_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
-  RCC_OscInitStruct.PLL.PLLM = 16;
-  RCC_OscInitStruct.PLL.PLLN = 192;
+  RCC_OscInitStruct.PLL.PLLM = 25;
+  RCC_OscInitStruct.PLL.PLLN = 336;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
   RCC_OscInitStruct.PLL.PLLQ = 4;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
@@ -400,7 +333,7 @@ void SystemClock_Config(void)
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_4) != HAL_OK)
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_5) != HAL_OK)
   {
     Error_Handler();
   }
@@ -441,4 +374,3 @@ void assert_failed(uint8_t *file, uint32_t line)
 }
 #endif /* USE_FULL_ASSERT */
 
-/************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/

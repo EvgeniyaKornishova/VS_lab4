@@ -14,11 +14,24 @@ void lock_init(Lock *lock, uint8_t * pass_len, uint8_t * pass_value)
 	  lock->length = *pass_len;
   }
   lock->number_of_mistakes = 0;
-  lock->input_time_start = HAL_GetTick();
+  lock->input_time_start = 0;
+}
+
+void lock_start_timer(Lock *lock)
+{
+	lock->input_time_start = HAL_GetTick();
+}
+
+void lock_stop_timer(Lock *lock)
+{
+	lock->input_time_start = 0;
 }
 
 uint8_t lock_is_input_time_expired(Lock *lock)
 {
+  if (lock->input_time_start == 0)
+	  return 0;
+
   return HAL_GetTick() > (lock->input_time_start + LOCK_PASS_INPUT_TIME_LIMIT);
 }
 
