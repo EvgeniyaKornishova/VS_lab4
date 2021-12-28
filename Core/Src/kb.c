@@ -7,7 +7,7 @@
 
 
 uint8_t check_row(uint8_t Nrow) {
- uint8_t buf = 0;
+ uint8_t buf;
  uint8_t kb_in;
 
  buf = Nrow;
